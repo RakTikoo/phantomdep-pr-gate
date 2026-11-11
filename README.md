@@ -37,6 +37,28 @@ Output is one markdown PR comment (`--comment-out`), plus text or `--json`.
 > zero-dependency, no-token, stdlib-only CLI. If that workflow delta does
 > not matter to you, use pkgguard-cli or Socket. See `ANALYSIS.md`.
 
+## What it looks like
+
+A real comment posted by this Action on a real PR — from the live
+cross-repo proof in
+[RakTikoo/phantomdep-dogfood](https://github.com/RakTikoo/phantomdep-dogfood/pull/2),
+where the PR added the typosquat `reqeusts`:
+
+> ## 👻 PhantomDep PR Gate
+>
+> | Package | Ecosystem | Manifest | Section | Verdict | Age | Weekly downloads | Imported? |
+> |---|---|---|---|---|---|---|---|
+> | `reqeusts` | pypi | `requirements.txt` | requirements | NOT-FOUND, SUSPECT-TYPO (close to `requests`) | unknown | unknown | True |
+>
+> **Blocking: `reqeusts` — NOT-FOUND or blocking SUSPECT-TYPO. Do not merge until resolved.**
+
+That PR's check went red (exit 1) and stayed unmergeable until fixed.
+The clean counterpart —
+[PR #1](https://github.com/RakTikoo/phantomdep-dogfood/pull/1), adding
+`lodash` + `requests` — got the same one comment with both deps `OK`
+and a green check; a later version-bump commit updated that same
+comment in place rather than posting a second one.
+
 ## Quick start (offline-testable mode first)
 
 ```bash
