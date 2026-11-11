@@ -1,0 +1,6 @@
+{
+  "name": "x",
+  "dependencies": {
+    "tiny-new-lib": "^0.0.1"
+  }
+}
