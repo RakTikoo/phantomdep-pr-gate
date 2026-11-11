@@ -1,0 +1,6 @@
+{
+  "name": "x",
+  "dependencies": {
+    "preact": "^10.0.0"
+  }
+}
