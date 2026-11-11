@@ -128,10 +128,10 @@ downloads still blocks, exactly as before.
 
 ## GitHub Action
 
-Consumers pin a tagged release once tags are applied on an approved
-release (see `RELEASE_NOTES.md` for the tagging checklist — no tag was
-created by the local v0.2 build):
-`uses: RakTikoo/phantomdep-pr-gate@v0.1`.
+Consumers pin a tagged release. Tags `v0.1` (at commit `eceb988`)
+and `v0.2` (at commit `97009c0`, the current release) both exist —
+see `RELEASE_NOTES.md` for the completed release record:
+`uses: RakTikoo/phantomdep-pr-gate@v0.2`.
 
 See `action.yml` and `examples/github-workflow.yml`: on `pull_request`,
 the action runs PhantomDep with `--base`/`--head` SHAs in `--live` mode
@@ -161,7 +161,7 @@ python3 run_tests.py   # 108 tests, zero deps, zero network (FakeRegistry;
 This repo's own CI (`.github/workflows/tests.yml`) runs the same suite
 on push + pull_request on Python 3.11 / 3.12.
 
-## Dogfood (local simulation)
+## Dogfood (local simulation + live cross-repo proof)
 
 `fixtures/dogfood-clean/` (adds imported `lodash` + `requests` → all
 `OK`, exit 0) and `fixtures/dogfood-bad/` (adds `reqeusts` →
@@ -169,10 +169,15 @@ on push + pull_request on Python 3.11 / 3.12.
 `UNUSED`, exit 1) simulate a consumer repo offline with FakeRegistry;
 expected comments are saved at `examples/dogfood-clean-comment.md` and
 `examples/dogfood-bad-comment.md`, and `examples/dogfood-workflow.yml`
-shows a consumer workflow. **Honest status:** this is a local
-simulation — PhantomDep has not yet run as an Action in another repo
-on GitHub; a real cross-repo run still needs a live PR after a push is
-approved.
+shows a consumer workflow. **Proven live (2026-11-11):** the
+published Action has also run as a real cross-repo consumer in
+[RakTikoo/phantomdep-dogfood](https://github.com/RakTikoo/phantomdep-dogfood),
+whose workflow pins `RakTikoo/phantomdep-pr-gate@v0.2`. Clean PR #1
+(lodash + requests) passed green with exactly one PhantomDep comment
+(both deps OK); a version-bump commit updated that same comment in
+place (still exactly one). Bad PR #2 (the `reqeusts` typosquat) was
+blocked as designed — its run is red with exit 1 and one comment
+showing NOT-FOUND + SUSPECT-TYPO. Both PRs remain open as evidence.
 
 ## License
 

@@ -978,7 +978,12 @@ class DogfoodAndCiTests(unittest.TestCase):
         self.assertIn("v0.1", txt)
         self.assertIn("eceb988", txt)
         self.assertIn("uses: RakTikoo/phantomdep-pr-gate@v0.1", txt)
-        self.assertIn("No tag", txt)
+        # Updated 2026-11-11 (staleness fix): the file is now the
+        # completed release record — both tags exist, boxes ticked.
+        self.assertIn("97009c0", txt)
+        self.assertIn("uses: RakTikoo/phantomdep-pr-gate@v0.2", txt)
+        self.assertIn("[x]", txt)
+        self.assertNotIn("No tag or repo was created", txt)
 
 
 class FixPassV02Tests(unittest.TestCase):

@@ -2,6 +2,8 @@
 
 *Built 2026-11-10. Local only; nothing pushed or published.*
 
+*Superseded 2026-11-11: this repo has since been pushed and released — tags `v0.1` at `eceb988` and `v0.2` at `97009c0` (current head) with GitHub releases for both, its own CI green on GitHub, and a live cross-repo dogfood proof in RakTikoo/phantomdep-dogfood (clean PR #1 green, `reqeusts` PR #2 blocked). Status lines in the dated sections below ("local only / not pushed / no tag / not yet run / still needs a live PR") are build-time records from 2026-11-10 and no longer describe the current state; see README.md and RELEASE_NOTES.md for the current record.*
+
 ## Honesty statement (required)
 
 **The core existence check in this tool is NOT unique.** pkgguard-cli
@@ -218,6 +220,8 @@ for exotic hunk shapes (the exact dir/git modes are unaffected). The
 and say so in the output (`NOT-AUDITED` / truncation note).
 
 ## v0.2 wave (2026-11-10, local only — not pushed, no tag created)
+
+*Superseded 2026-11-11: v0.2 was pushed and tagged (head `97009c0`, tag/release `v0.2`; `v0.1` tagged at `eceb988`), its own CI has run green on GitHub, and the Action has run live cross-repo in RakTikoo/phantomdep-dogfood (see the banner at the top of this file). The "not run / no tag / needs a live PR" notes inside this dated section are build-time records.*
 
 Scope approved by Rakshit ("Do it"): own CI + v0.1 tag prep + dogfood
 + monorepo recursion + pypistats in `--live` only. SARIF + policy
