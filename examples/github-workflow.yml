@@ -1,0 +1,21 @@
+# Example consumer workflow: run PhantomDep on every pull request.
+name: PhantomDep PR Gate
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - "requirements.txt"
+      - "pyproject.toml"
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  phantomdep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./   # in a real repo: uses: <owner>/phantomdep-pr-gate@v0
+        with:
+          live: "true"
