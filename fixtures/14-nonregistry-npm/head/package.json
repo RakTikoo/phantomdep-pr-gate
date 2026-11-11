@@ -1,0 +1,6 @@
+{
+  "name": "x",
+  "dependencies": {
+    "local-lib": "workspace:*"
+  }
+}
