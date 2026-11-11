@@ -1,0 +1,6 @@
+{
+  "name": "x",
+  "peerDependencies": {
+    "lodash": "^4.17.21"
+  }
+}
