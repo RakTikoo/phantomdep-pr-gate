@@ -8,9 +8,12 @@ For each added dependency in `package.json`, `requirements.txt`, or
 - **Existence** — is it on npm / PyPI at all? (the slopsquatting signal:
   LLMs invent package names, and attackers register them)
 - **Age** — days since first published; `< 30 days` is `NEWBORN`
-- **Weekly downloads** — npm downloads API; for PyPI the JSON API provides
-  no download counts, so PhantomDep reports **`unknown`** and never
-  fabricates a number
+- **Weekly downloads** — npm downloads API; the PyPI JSON API provides
+  no download counts, so in **`--live` mode only** PhantomDep fetches
+  them from [pypistats](https://pypistats.org/api/) (`/recent` →
+  `data.last_week`). Offline / fixture mode reports **`unknown`** for
+  PyPI and never fabricates a number, and any pypistats failure in live
+  mode degrades to `unknown`
 - **Typo distance** — Levenshtein distance 1–2 to a built-in list of ~50
   popular packages per ecosystem, when the added name is not itself that
   popular name. Blocking requires strong evidence (see the typo policy
@@ -61,10 +64,34 @@ is reported as `unknown` — PhantomDep never guesses offline.
   are out of scope** — they pin versions of transitive deps rather than
   adding direct deps, and are not parsed.
 - `requirements.txt`: plain requirement lines. `-r` includes are **not
-  followed** (a warning is printed); only the top-level file is audited.
+  followed** (a warning is printed); that file itself is audited.
 - `pyproject.toml`: `project.dependencies`,
   `project.optional-dependencies`, PEP 735 `dependency-groups`, and
   `[tool.poetry.dependencies]` (+ poetry group/dev dependencies).
+
+**Monorepo recursion (v0.2):** in `--base-dir`/`--head-dir` and
+git-ref modes, manifests are discovered at **any depth** and paired
+base↔head by relative path; the manifest path is shown in text, JSON
+and the PR comment. A manifest only in head contributes all its deps;
+only in base is ignored. Directories never searched: `.git`,
+`node_modules` and `__pycache__` at any depth; `.venv`, `venv`, `dist`,
+`build`, `.tox`, `.eggs`, `.mypy_cache`, `.pytest_cache` at the top
+level only (a nested `packages/build` is a real package and *is*
+audited). Symlinked directories are never followed; in git mode,
+symlinked manifests are skipped with a note (never parsed). A pure
+manifest *move* (same filename, paired base↔head) is not a re-audit.
+The audit cap is **100 manifests per comparison**, applied to the
+*same* sorted set on both sides so truncation can never manufacture
+an "added" dep, and it is reported as a note in text, JSON and the PR
+comment (never just stderr). A hard cap of 1000 manifests fails with
+exit 2 rather than auditing partially. The existing 200-added-deps
+audit cap still applies (`NOT-AUDITED` beyond it, flagged as an
+incomplete audit in the comment). Manifests under `fixtures/`,
+`examples/`, `docs/` etc. **are** audited like any other — scope the
+Action's `paths:` filter if your repo keeps intentionally fake deps
+in test fixtures.
+`--diff-file` mode already keyed entries by full manifest path; nested
+paths there are regression-tested.
 
 **Non-registry specs are skipped, never flagged:** `workspace:`, `file:`,
 `link:`, `git+`/`git:`, `http(s):`, `npm:`, `catalog:`, `portal:` specs and
@@ -74,7 +101,8 @@ listed separately, and never affect the exit code.
 ## Verdicts & exit policy (exact)
 
 Per added dep, verdicts can combine: `OK`, `NEWBORN`, `LOW-DOWNLOADS`
-(npm weekly downloads < 1000, when known), `SUSPECT-TYPO`,
+(weekly downloads < 1000, when known — npm always in live mode, PyPI
+in live mode via pypistats), `SUSPECT-TYPO`,
 `TYPO-LOOKALIKE`, `NOT-FOUND`, `UNUSED` (added but never imported),
 `UNKNOWN-REGISTRY` (lookup failed), `SKIPPED-NONREGISTRY`,
 `NOT-AUDITED` (beyond the 200-added-deps-per-run cap).
@@ -88,7 +116,9 @@ Per added dep, verdicts can combine: `OK`, `NEWBORN`, `LOW-DOWNLOADS`
 | exists, young **and** low/unknown downloads | `SUSPECT-TYPO` (blocks) |
 | registry unknown | `TYPO-LOOKALIKE` (warning — unknown ≠ not-found) |
 
-For PyPI, weekly downloads are unknown, so age ≥ 365 d alone exonerates.
+For PyPI, weekly downloads are known only in `--live` mode (via
+pypistats); offline, age ≥ 365 d alone exonerates. Young + unknown
+downloads still blocks, exactly as before.
 
 | Exit | Meaning |
 |---|---|
@@ -97,6 +127,11 @@ For PyPI, weekly downloads are unknown, so age ≥ 365 d alone exonerates.
 | `2` | usage / input error — including a manifest that is present but unparseable or oversized, invalid TOML, or a git failure other than "path absent at ref" (the file is named) |
 
 ## GitHub Action
+
+Consumers pin a tagged release once tags are applied on an approved
+release (see `RELEASE_NOTES.md` for the tagging checklist — no tag was
+created by the local v0.2 build):
+`uses: RakTikoo/phantomdep-pr-gate@v0.1`.
 
 See `action.yml` and `examples/github-workflow.yml`: on `pull_request`,
 the action runs PhantomDep with `--base`/`--head` SHAs in `--live` mode
@@ -118,10 +153,26 @@ installed or executed.
 ## Tests
 
 ```bash
-python3 run_tests.py   # 74 tests, zero deps, zero network (FakeRegistry;
-                       # LiveRegistry parsing is tested with mocked urlopen
-                       # against captured-shape registry payloads)
+python3 run_tests.py   # 108 tests, zero deps, zero network (FakeRegistry;
+                       # LiveRegistry + pypistats parsing is tested with
+                       # mocked urlopen against captured-shape payloads)
 ```
+
+This repo's own CI (`.github/workflows/tests.yml`) runs the same suite
+on push + pull_request on Python 3.11 / 3.12.
+
+## Dogfood (local simulation)
+
+`fixtures/dogfood-clean/` (adds imported `lodash` + `requests` → all
+`OK`, exit 0) and `fixtures/dogfood-bad/` (adds `reqeusts` →
+`NOT-FOUND` + `SUSPECT-TYPO`, `freshpypi-lib` → `NEWBORN`, `axios` →
+`UNUSED`, exit 1) simulate a consumer repo offline with FakeRegistry;
+expected comments are saved at `examples/dogfood-clean-comment.md` and
+`examples/dogfood-bad-comment.md`, and `examples/dogfood-workflow.yml`
+shows a consumer workflow. **Honest status:** this is a local
+simulation — PhantomDep has not yet run as an Action in another repo
+on GitHub; a real cross-repo run still needs a live PR after a push is
+approved.
 
 ## License
 

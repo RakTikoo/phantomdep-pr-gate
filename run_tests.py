@@ -716,6 +716,472 @@ class MiscFixTests(unittest.TestCase):
         self.assertIn("existsSync", yml)          # missing comment tolerated
         self.assertIn(".includes(marker)", yml)   # marker anywhere in body
 
+class MonorepoTests(unittest.TestCase):
+    def test_16_monorepo_mixed(self):
+        added, results = run_pair("16-monorepo-mixed")
+        self.assertEqual({(a.name, a.manifest_path) for a in added}, {
+            ("lodash", "packages/web/package.json"),
+            ("requests", "packages/api/requirements.txt"),
+            ("flask", "services/worker/pyproject.toml")})
+        for r in results:
+            self.assertEqual(r.verdicts, ["OK"], r.name)
+        self.assertEqual(pd.exit_code_for(results), 0)
+        # node_modules manifest was excluded, base-only manifest ignored
+        self.assertNotIn("evil-not-real-zzz", [a.name for a in added])
+
+    def test_17_monorepo_peer_move_not_addition(self):
+        added, _ = run_pair("17-monorepo-peer-move")
+        self.assertEqual(added, [])
+
+    def test_manifest_path_in_all_outputs(self):
+        _, results = run_pair("16-monorepo-mixed")
+        self.assertIn("packages/web/package.json", pd.render_text(results))
+        self.assertIn("packages/web/package.json", pd.render_comment(results))
+        data = json.loads(pd.results_to_json(results))
+        paths = {r["name"]: r["manifest_path"] for r in data["results"]}
+        self.assertEqual(paths["lodash"], "packages/web/package.json")
+
+    def test_same_dep_in_two_manifests_both_audited(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for side in ("base", "head"):
+                for pkg in ("a", "b"):
+                    os.makedirs(os.path.join(d, side, pkg))
+                    with open(os.path.join(d, side, pkg, "package.json"), "w") as fh:
+                        fh.write('{"dependencies": {}}' if side == "base" else
+                                 '{"dependencies": {"lodash": "^4"}}')
+            added = pd.diff_manifests(
+                pd.load_manifests_from_dir(os.path.join(d, "base")),
+                pd.load_manifests_from_dir(os.path.join(d, "head")))
+            self.assertEqual({a.manifest_path for a in added},
+                             {"a/package.json", "b/package.json"})
+
+    def test_unparseable_nested_manifest_exit_2_names_path(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "sub"))
+            with open(os.path.join(d, "sub", "package.json"), "w") as fh:
+                fh.write("{nope")
+            with self.assertRaises(pd.ManifestError) as cm:
+                pd.load_manifests_from_dir(d)
+            self.assertIn(os.path.join("sub", "package.json"), str(cm.exception))
+
+    def test_manifest_cap_truncation_not_silent(self):
+        import io, tempfile
+        from contextlib import redirect_stderr
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(pd.MAX_MANIFESTS + 5):
+                sub = os.path.join(d, f"pkg{i:03d}")
+                os.makedirs(sub)
+                with open(os.path.join(sub, "package.json"), "w") as fh:
+                    fh.write('{"dependencies": {}}')
+            err = io.StringIO()
+            with redirect_stderr(err):
+                m = pd.load_manifests_from_dir(d)
+            # Loader loads all (symmetric cap is applied by diff_manifests);
+            # the truncation flag is set and readable.
+            self.assertTrue(m.truncated)
+            self.assertEqual(len(m), pd.MAX_MANIFESTS + 5)
+            added = pd.diff_manifests(pd.ManifestMap(), m)
+            self.assertTrue(added.manifest_truncated)
+            self.assertEqual(added.manifest_audited, pd.MAX_MANIFESTS)
+
+    def test_diff_file_nested_paths(self):
+        diff = (
+            "diff --git a/packages/api/requirements.txt b/packages/api/requirements.txt\n"
+            "--- a/packages/api/requirements.txt\n+++ b/packages/api/requirements.txt\n"
+            "@@ -1 +1,2 @@\n flask==3.0.0\n+reqeusts==2.31.0\n"
+            "diff --git a/services/w/pyproject.toml b/services/w/pyproject.toml\n"
+            "--- a/services/w/pyproject.toml\n+++ b/services/w/pyproject.toml\n"
+            "@@ -1,3 +1,4 @@\n [project]\n dependencies = [\n+    \"flask>=3\",\n ]\n")
+        added = pd.parse_diff_file(diff)
+        by_name = {a.name: a for a in added}
+        self.assertEqual(by_name["reqeusts"].manifest_path,
+                         "packages/api/requirements.txt")
+        self.assertEqual(by_name["flask"].manifest_path, "services/w/pyproject.toml")
+
+    def test_git_mode_monorepo(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                subprocess.run(["git", *a], cwd=d, check=True,
+                               capture_output=True, text=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t.t"); git("config", "user.name", "t")
+            os.makedirs(os.path.join(d, "pkg", "sub"))
+            with open(os.path.join(d, "pkg", "sub", "requirements.txt"), "w") as fh:
+                fh.write("flask==3.0.0\n")
+            git("add", "."); git("commit", "-qm", "one")
+            with open(os.path.join(d, "pkg", "sub", "requirements.txt"), "w") as fh:
+                fh.write("flask==3.0.0\nrequests==2.32.3\n")
+            with open(os.path.join(d, "pkg", "sub", "app.py"), "w") as fh:
+                fh.write("import requests\n")
+            git("add", "."); git("commit", "-qm", "two")
+            m_base = pd.load_manifests_from_ref("HEAD~1", d)
+            m_head = pd.load_manifests_from_ref("HEAD", d)
+            self.assertIn("pkg/sub/requirements.txt", m_head)
+            added = pd.diff_manifests(m_base, m_head)
+            self.assertEqual([(a.name, a.manifest_path) for a in added],
+                             [("requests", "pkg/sub/requirements.txt")])
+
+
+class PypistatsTests(unittest.TestCase):
+    RAW = os.path.join(ROOT, "tests", "fixtures", "registry-raw")
+
+    def _load(self, name):
+        with open(os.path.join(self.RAW, name)) as fh:
+            return json.load(fh)
+
+    def _mock(self, router):
+        import unittest.mock as mock
+        def fake_urlopen(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            return _FakeResp(router(url))
+        return mock.patch.object(pd.urllib.request, "urlopen", fake_urlopen)
+
+    @staticmethod
+    def _pypi_payload(created="2011-02-13T00:00:00"):
+        return {"info": {"name": "requests"},
+                "releases": {"1.0.0": [{"filename": "x.tar.gz", "yanked": False,
+                                         "upload_time": created}]}}
+
+    def test_pypistats_recent_shape_downloads(self):
+        recent = self._load("pypistats-requests-recent.json")
+        with self._mock(lambda u: recent if "pypistats" in u else self._pypi_payload()):
+            info = pd.LiveRegistry().lookup("pypi", "requests")
+        self.assertTrue(info.exists)
+        self.assertEqual(info.weekly_downloads, 50000000)
+
+    def test_pypistats_failure_degrades_to_unknown(self):
+        def boom(url):
+            if "pypistats" in url:
+                raise OSError("network down")
+            return self._pypi_payload()
+        import unittest.mock as mock
+        def fake_urlopen(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            payload = boom(url)
+            return _FakeResp(payload)
+        with mock.patch.object(pd.urllib.request, "urlopen", fake_urlopen):
+            info = pd.LiveRegistry().lookup("pypi", "requests")
+        self.assertTrue(info.exists)
+        self.assertIsNone(info.weekly_downloads)
+
+    def test_pypistats_malformed_and_bool_rejected(self):
+        for payload in (self._load("pypistats-malformed.json"),
+                        {"data": {"last_week": True}, "package": "requests",
+                         "type": "recent_downloads"},
+                        {"data": [1, 2], "package": "requests"},
+                        {"unexpected": 1}):
+            with self._mock(lambda u, pl=payload: pl if "pypistats" in u
+                            else self._pypi_payload()):
+                info = pd.LiveRegistry().lookup("pypi", "requests")
+            self.assertIsNone(info.weekly_downloads, payload)
+
+    def test_pypistats_url_uses_pep503_name(self):
+        seen = []
+        recent = self._load("pypistats-requests-recent.json")
+        def router(u):
+            seen.append(u)
+            return recent if "pypistats" in u else self._pypi_payload()
+        with self._mock(router):
+            pd.LiveRegistry().lookup("pypi", "My_Package.Name")
+        self.assertTrue(any("pypistats.org/api/packages/my-package-name/recent" in u
+                            for u in seen), seen)
+
+    def test_young_high_downloads_pypi_exonerated_by_pypistats(self):
+        recent = {"data": {"last_day": 9000, "last_week": 50000,
+                           "last_month": 200000},
+                  "package": "requets", "type": "recent_downloads"}
+        young = self._pypi_payload("2026-11-05T00:00:00")
+        young["info"] = {"name": "requets"}
+        with self._mock(lambda u: recent if "pypistats" in u else young):
+            info = pd.LiveRegistry().lookup("pypi", "requets")
+        dep = pd.AddedDep(name="requets", ecosystem="pypi",
+                          manifest="requirements.txt", version_spec="==1.0")
+        reg = pd.FakeRegistry({("pypi", "requets"): info})
+        r = pd.audit_dep(dep, reg, None, now=NOW)
+        self.assertIn("TYPO-LOOKALIKE", r.verdicts)
+        self.assertEqual(pd.exit_code_for([r]), 0)
+
+    def test_young_low_downloads_pypi_still_blocks(self):
+        recent = self._load("pypistats-young-recent.json")
+        self.assertEqual(recent["package"], "requets")
+        young = self._pypi_payload("2026-11-05T00:00:00")
+        young["info"] = {"name": "requets"}
+        with self._mock(lambda u: recent if "pypistats" in u else young):
+            info = pd.LiveRegistry().lookup("pypi", "requets")
+        self.assertEqual(info.weekly_downloads, 12)
+        dep = pd.AddedDep(name="requets", ecosystem="pypi",
+                          manifest="requirements.txt", version_spec="==1.0")
+        reg = pd.FakeRegistry({("pypi", "requets"): info})
+        r = pd.audit_dep(dep, reg, None, now=NOW)
+        self.assertIn("SUSPECT-TYPO", r.verdicts)
+        self.assertTrue(r.blocking)
+
+    def test_fake_and_offline_registries_never_call_pypistats(self):
+        import unittest.mock as mock
+        with mock.patch.object(pd.urllib.request, "urlopen",
+                               side_effect=AssertionError("network!")):
+            self.assertTrue(registry().lookup("pypi", "requests").exists)
+            self.assertIsNone(pd._UnknownRegistry().lookup("pypi", "requests").exists)
+
+
+class DogfoodAndCiTests(unittest.TestCase):
+    def test_dogfood_clean(self):
+        added, results = run_pair("dogfood-clean")
+        self.assertEqual({a.name for a in added}, {"lodash", "requests"})
+        for r in results:
+            self.assertEqual(r.verdicts, ["OK"], r.name)
+        self.assertEqual(pd.exit_code_for(results), 0)
+
+    def test_dogfood_bad(self):
+        added, results = run_pair("dogfood-bad")
+        by = {r.name: r for r in results}
+        self.assertIn("NOT-FOUND", by["reqeusts"].verdicts)
+        self.assertIn("SUSPECT-TYPO", by["reqeusts"].verdicts)
+        self.assertIn("NEWBORN", by["freshpypi-lib"].verdicts)
+        self.assertIn("UNUSED", by["axios"].verdicts)
+        self.assertEqual(pd.exit_code_for(results), 1)
+
+    def test_dogfood_expected_comments_saved(self):
+        for pair, fname in (("dogfood-clean", "dogfood-clean-comment.md"),
+                            ("dogfood-bad", "dogfood-bad-comment.md")):
+            _, results = run_pair(pair)
+            with open(os.path.join(ROOT, "examples", fname)) as fh:
+                self.assertEqual(fh.read(), pd.render_comment(results), fname)
+
+    def test_dogfood_workflow_example_pins_tag(self):
+        with open(os.path.join(ROOT, "examples", "dogfood-workflow.yml")) as fh:
+            yml = fh.read()
+        self.assertIn("RakTikoo/phantomdep-pr-gate@v0.1", yml)
+        self.assertIn("pull_request", yml)
+
+    def test_own_ci_workflow_contract(self):
+        path = os.path.join(ROOT, ".github", "workflows", "tests.yml")
+        self.assertTrue(os.path.isfile(path))
+        with open(path) as fh:
+            yml = fh.read()
+        self.assertIn("push:", yml)
+        self.assertIn("pull_request:", yml)
+        self.assertIn("python3 run_tests.py", yml)
+        self.assertIn('"3.11"', yml)
+        self.assertIn('"3.12"', yml)
+        self.assertIn("actions/checkout@v4", yml)
+        self.assertIn("actions/setup-python@v5", yml)
+        self.assertIn("permissions:", yml)
+        self.assertIn("contents: read", yml)
+
+    def test_release_notes_tagging_checklist(self):
+        with open(os.path.join(ROOT, "RELEASE_NOTES.md")) as fh:
+            txt = fh.read()
+        self.assertIn("v0.1", txt)
+        self.assertIn("eceb988", txt)
+        self.assertIn("uses: RakTikoo/phantomdep-pr-gate@v0.1", txt)
+        self.assertIn("No tag", txt)
+
+
+class FixPassV02Tests(unittest.TestCase):
+    """Regression tests for the v0.2 adversarial-review fix pass."""
+
+    def test_git_mode_nonascii_path_not_silently_skipped(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                subprocess.run(["git", *a], cwd=d, check=True,
+                               capture_output=True, text=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t.t"); git("config", "user.name", "t")
+            sub = os.path.join(d, "café-pkg")
+            os.makedirs(sub)
+            with open(os.path.join(sub, "requirements.txt"), "w") as fh:
+                fh.write("flask==3.0.0\n")
+            git("add", "."); git("commit", "-qm", "one")
+            with open(os.path.join(sub, "requirements.txt"), "w") as fh:
+                fh.write("flask==3.0.0\nrequests==2.32.3\n")
+            git("add", "."); git("commit", "-qm", "two")
+            added = pd.diff_manifests(
+                pd.load_manifests_from_ref("HEAD~1", d),
+                pd.load_manifests_from_ref("HEAD", d))
+            self.assertEqual([(a.name, a.manifest_path) for a in added],
+                             [("requests", "café-pkg/requirements.txt")])
+
+    def test_git_mode_symlinked_manifest_skipped_not_parsed(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                subprocess.run(["git", *a], cwd=d, check=True,
+                               capture_output=True, text=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t.t"); git("config", "user.name", "t")
+            with open(os.path.join(d, "shared.json"), "w") as fh:
+                fh.write('{"dependencies": {"lodash": "^4"}}')
+            os.symlink("shared.json", os.path.join(d, "package.json"))
+            git("add", "."); git("commit", "-qm", "one")
+            m = pd.load_manifests_from_ref("HEAD", d)  # must not raise
+            self.assertNotIn("package.json", m)
+
+    def test_cap_asymmetry_no_false_additions(self):
+        def side(names):
+            m = pd.ManifestMap()
+            for n in names:
+                eco_entries = {"reqeusts": pd.ManifestEntry(
+                    name="reqeusts", spec="==1.0", section="requirements")}
+                m[f"{n}/requirements.txt"] = eco_entries if n == "m100" else {}
+            return m
+        all_names = [f"m{i:03d}" for i in range(101)]
+        base = side(all_names)
+        head = side(all_names[1:])  # PR only DELETES m000
+        added = pd.diff_manifests(base, head)
+        self.assertEqual(added, [])
+        self.assertTrue(added.manifest_truncated)
+
+    def test_truncation_notes_reach_outputs(self):
+        notes = ["manifest cap: 101 manifests found, only the first 100 "
+                 "(sorted by path, same set on both sides) were audited; "
+                 "the rest were NOT audited."]
+        _, results = run_pair("01-clean-npm")
+        self.assertIn("Audit note", pd.render_comment(results, notes=notes))
+        self.assertIn("manifest cap", pd.render_text(results, notes=notes))
+        data = json.loads(pd.results_to_json(results, notes=notes))
+        self.assertEqual(data["notes"], notes)
+
+    def test_excluded_names_only_top_level_except_tool_dirs(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for rel in ("packages/build/package.json",
+                        "services/dist/requirements.txt",
+                        "tools/venv/pyproject.toml",
+                        "build/package.json",
+                        "node_modules/x/package.json",
+                        "pkg/node_modules/y/package.json"):
+                path = os.path.join(d, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as fh:
+                    fh.write('{"dependencies": {}}' if rel.endswith(".json")
+                             else ("" if rel.endswith(".toml") else "#\n"))
+            found = pd.discover_manifests_in_dir(d)
+            self.assertIn("packages/build/package.json", found)
+            self.assertIn("services/dist/requirements.txt", found)
+            self.assertIn("tools/venv/pyproject.toml", found)
+            self.assertNotIn("build/package.json", found)
+            self.assertNotIn("node_modules/x/package.json", found)
+            self.assertNotIn("pkg/node_modules/y/package.json", found)
+
+    def test_identical_broken_manifest_both_sides_does_not_fail(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for side in ("base", "head"):
+                os.makedirs(os.path.join(d, side, "fixtures"))
+                with open(os.path.join(d, side, "fixtures", "package.json"), "w") as fh:
+                    fh.write("not json{{{")
+                with open(os.path.join(d, side, "package.json"), "w") as fh:
+                    fh.write('{"dependencies": {}}' if side == "base" else
+                             '{"dependencies": {"lodash": "^4"}}')
+            added = pd.diff_manifests(
+                pd.load_manifests_from_dir(os.path.join(d, "base"), collect_errors=True),
+                pd.load_manifests_from_dir(os.path.join(d, "head"), collect_errors=True))
+            self.assertEqual([a.name for a in added], ["lodash"])
+            # ... but a head-side broken manifest that CHANGED raises
+            with open(os.path.join(d, "head", "fixtures", "package.json"), "w") as fh:
+                fh.write("different broken{{{")
+            with self.assertRaises(pd.ManifestError):
+                pd.diff_manifests(
+                    pd.load_manifests_from_dir(os.path.join(d, "base"), collect_errors=True),
+                    pd.load_manifests_from_dir(os.path.join(d, "head"), collect_errors=True))
+
+    def test_moved_manifest_identical_not_reaudited(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for side, rel in (("base", "packages/web/package.json"),
+                              ("head", "apps/web/package.json")):
+                path = os.path.join(d, side, rel)
+                os.makedirs(os.path.dirname(path))
+                with open(path, "w") as fh:
+                    fh.write('{"dependencies": {"lodash": "^4.17.21"}}')
+            added = pd.diff_manifests(
+                pd.load_manifests_from_dir(os.path.join(d, "base")),
+                pd.load_manifests_from_dir(os.path.join(d, "head")))
+            self.assertEqual(added, [])
+            # moved AND one dep added: only the new dep is an addition
+            with open(os.path.join(d, "head", "apps/web/package.json"), "w") as fh:
+                fh.write('{"dependencies": {"lodash": "^4.17.21", "axios": "^1"}}')
+            added = pd.diff_manifests(
+                pd.load_manifests_from_dir(os.path.join(d, "base")),
+                pd.load_manifests_from_dir(os.path.join(d, "head")))
+            self.assertEqual([a.name for a in added], ["axios"])
+
+    def test_pypistats_package_mismatch_rejected(self):
+        recent = {"data": {"last_week": 999999}, "package": "requests",
+                  "type": "recent_downloads"}
+        reg = pd.LiveRegistry()
+        import unittest.mock as mock
+        def fake(req, timeout=None):
+            return _FakeResp(recent)
+        with mock.patch.object(pd.urllib.request, "urlopen", fake):
+            self.assertIsNone(reg._pypistats_weekly_downloads("requets"))
+            self.assertEqual(reg._pypistats_weekly_downloads("requests"), 999999)
+
+    def test_pypistats_range_and_type_rejected(self):
+        reg = pd.LiveRegistry()
+        import unittest.mock as mock
+        for payload in ({"data": {"last_week": -5}, "package": "requests",
+                         "type": "recent_downloads"},
+                        {"data": {"last_week": 10**30}, "package": "requests",
+                         "type": "recent_downloads"},
+                        {"data": {"last_week": 50000}, "package": "requests",
+                         "type": "overall_downloads"}):
+            with mock.patch.object(pd.urllib.request, "urlopen",
+                                   lambda req, timeout=None, pl=payload: _FakeResp(pl)):
+                self.assertIsNone(reg._pypistats_weekly_downloads("requests"),
+                                  payload)
+
+    def test_live_registry_caches_per_package(self):
+        import unittest.mock as mock
+        calls = []
+        payload = PypistatsTests("test_pypistats_recent_shape_downloads")._pypi_payload()
+        recent = {"data": {"last_week": 50000000}, "package": "requests",
+                  "type": "recent_downloads"}
+        def fake(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            calls.append(url)
+            return _FakeResp(recent if "pypistats" in url else payload)
+        reg = pd.LiveRegistry()
+        with mock.patch.object(pd.urllib.request, "urlopen", fake):
+            a = reg.lookup("pypi", "requests")
+            b = reg.lookup("pypi", "Requests")
+        self.assertEqual(a, b)
+        self.assertEqual(len(calls), 2)  # 1x PyPI + 1x pypistats, not 4
+
+    def test_fifo_manifest_refused_not_hung(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            os.mkfifo(os.path.join(d, "package.json"))
+            with self.assertRaises(pd.ManifestError):
+                pd.load_manifests_from_dir(d)
+
+    def test_dir_symlink_escaping_manifest_refused(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as outside, \
+                tempfile.TemporaryDirectory() as root:
+            target = os.path.join(outside, "package.json")
+            with open(target, "w") as fh:
+                fh.write('{"dependencies": {"lodash": "^4"}}')
+            os.symlink(target, os.path.join(root, "package.json"))
+            with self.assertRaises(pd.ManifestError):
+                pd.load_manifests_from_dir(root)
+
+    def test_not_audited_comment_and_header_are_honest(self):
+        deps = [pd.AddedDep(name=f"pkg-{i:03d}", ecosystem="npm",
+                            manifest="package.json", version_spec="^1.0.0")
+                for i in range(205)]
+        results = pd.audit(deps, pd.FakeRegistry({}), None, now=NOW)
+        self.assertIn("Audit incomplete", pd.render_comment(results))
+        header = pd.render_text(results).splitlines()[0]
+        self.assertIn("200 added dep(s) audited", header)
+        self.assertIn("5 not audited", header)
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

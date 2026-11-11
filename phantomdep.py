@@ -17,8 +17,9 @@ Exit policy (exact):
 Typo policy (blocking requires strong evidence):
   * NOT-FOUND + close to a popular name   -> SUSPECT-TYPO (blocks, via
     NOT-FOUND as well)
-  * exists, but young (<365 days) AND not popular (npm weekly downloads
-    unknown or <10000; PyPI downloads are unknown so age alone decides)
+  * exists, but young (<365 days) AND not popular (weekly downloads
+    unknown or <10000; in --live mode PyPI weekly downloads come from
+    pypistats, in offline mode they are unknown so age alone decides)
     -> SUSPECT-TYPO (blocks)
   * exists AND (age >= 365 days OR weekly downloads >= 10000)
     -> TYPO-LOOKALIKE (warning only — established packages such as
@@ -57,6 +58,19 @@ TYPO_EXONERATE_WEEKLY_DOWNLOADS = 10000
 MAX_AUDITED_DEPS = 200
 MAX_SCAN_FILES = 20000
 SCAN_NOTE_FILES = 5000
+MAX_MANIFESTS = 100
+MAX_MANIFESTS_HARD = 1000  # beyond this: exit 2, never a silent partial load
+# Dirs never searched for manifests, at ANY depth (tool/VCS generated,
+# never a source package's own name in practice):
+MANIFEST_EXCLUDED_DIRS_ANY_DEPTH = {".git", "node_modules", "__pycache__"}
+# Dirs excluded only at the TOP level of the tree/ref: build outputs and
+# venvs live there, but a nested dir with one of these names (e.g.
+# packages/build) is a real package and IS audited (fix pass, v0.2).
+MANIFEST_EXCLUDED_DIRS_TOP_LEVEL = {".venv", "venv", "dist", "build",
+                                    ".tox", ".eggs", ".mypy_cache",
+                                    ".pytest_cache"}
+MANIFEST_EXCLUDED_DIRS = (MANIFEST_EXCLUDED_DIRS_ANY_DEPTH
+                          | MANIFEST_EXCLUDED_DIRS_TOP_LEVEL)
 
 MANIFEST_NAMES = ("package.json", "requirements.txt", "pyproject.toml")
 COMMENT_MARKER = "<!-- phantomdep-pr-gate -->"
@@ -264,7 +278,7 @@ def _parse_requirements_entries(text: str) -> dict[str, ManifestEntry]:
         line = line.split(" #")[0].strip()
         if line.startswith("-r") or line.startswith("--requirement"):
             print(f"warning: requirements include '{line}' is not followed; "
-                  "only the top-level file is audited", file=sys.stderr)
+                  "only that file itself is audited", file=sys.stderr)
             continue
         if line.startswith("-"):
             continue  # -e, --index-url etc are not plain deps
@@ -393,32 +407,130 @@ def _entries_from_text(fname: str, text: str, where: str) -> dict[str, ManifestE
         raise ManifestError(f"unparseable manifest {where}: {e}") from e
 
 
-def load_manifests_from_dir(directory: str) -> dict[str, dict[str, ManifestEntry]]:
-    """filename -> {normalised key: ManifestEntry}.
+class ManifestMap(dict):
+    """relpath -> {normalised key: ManifestEntry}, plus discovery metadata.
 
-    A manifest that is PRESENT but oversized or unparseable raises
-    ManifestError (exit 2 naming the file) — never a silent empty parse.
-    Absent manifests are simply skipped.
+    `errors` maps relpath -> (content_sha256, message) for manifests that
+    were present but unparseable/oversized/non-regular in collect mode;
+    in strict mode the loaders raise instead of collecting.
     """
-    result: dict[str, dict[str, ManifestEntry]] = {}
-    for fname in MANIFEST_NAMES:
-        path = os.path.join(directory, fname)
-        if not os.path.isfile(path):
-            continue
-        try:
-            size = os.path.getsize(path)
-        except OSError as e:
-            raise ManifestError(f"cannot stat manifest {path}: {e}") from e
-        if size > MAX_MANIFEST_BYTES:
+    def __init__(self):
+        super().__init__()
+        self.truncated = False
+        self.total_found = 0
+        self.errors: dict[str, tuple[str, str]] = {}
+
+
+def _rel_excluded(rel: str) -> bool:
+    """Excluded-dir test for a manifest relpath (see constants):
+    any-depth names anywhere; top-level names only as the FIRST part."""
+    parts = rel.replace(os.sep, "/").split("/")[:-1]
+    for i, part in enumerate(parts):
+        if part in MANIFEST_EXCLUDED_DIRS_ANY_DEPTH:
+            return True
+        if i == 0 and part in MANIFEST_EXCLUDED_DIRS_TOP_LEVEL:
+            return True
+    return False
+
+
+def discover_manifests_in_dir(directory: str) -> list[str]:
+    """All manifest relpaths under `directory`, any depth, sorted.
+
+    Exclusions per _rel_excluded. Symlinked directories are NEVER
+    followed (os.walk default), escaping or not — documented behaviour.
+    """
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(directory):
+        rel_dir = os.path.relpath(dirpath, directory)
+        depth = 0 if rel_dir == "." else len(rel_dir.split(os.sep))
+        kept = []
+        for d in dirnames:
+            if d in MANIFEST_EXCLUDED_DIRS_ANY_DEPTH:
+                continue
+            if depth == 0 and d in MANIFEST_EXCLUDED_DIRS_TOP_LEVEL:
+                continue
+            kept.append(d)
+        dirnames[:] = sorted(kept)
+        for fname in sorted(filenames):
+            if fname in MANIFEST_NAMES:
+                found.append(os.path.relpath(os.path.join(dirpath, fname),
+                                             directory))
+    found.sort()
+    return found
+
+
+def _content_hash(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def _read_manifest_file(path: str, root: str) -> str:
+    """Read a manifest file safely: must be a regular file (a FIFO/device
+    raises instead of hanging), a symlink whose realpath escapes `root`
+    raises, and the read itself is capped (never unbounded)."""
+    import stat as _stat
+    st = os.lstat(path)
+    if os.path.islink(path):
+        real = os.path.realpath(path)
+        root_real = os.path.realpath(root)
+        if not (real == root_real or real.startswith(root_real + os.sep)):
             raise ManifestError(
-                f"manifest {path} is oversized ({size} bytes > "
-                f"{MAX_MANIFEST_BYTES}); refusing to audit a partial parse")
+                f"manifest {path} is a symlink escaping the audited tree; "
+                "refusing to follow it")
+        st = os.stat(path)
+    if not _stat.S_ISREG(st.st_mode):
+        raise ManifestError(f"manifest {path} is not a regular file; refusing to read it")
+    if st.st_size > MAX_MANIFEST_BYTES:
+        raise ManifestError(
+            f"manifest {path} is oversized ({st.st_size} bytes > "
+            f"{MAX_MANIFEST_BYTES}); refusing to audit a partial parse")
+    with open(path, "r", encoding="utf-8", errors="strict") as fh:
+        text = fh.read(MAX_MANIFEST_BYTES + 1)
+    if len(text) > MAX_MANIFEST_BYTES:
+        raise ManifestError(f"manifest {path} is oversized; refusing a partial parse")
+    return text
+
+
+def load_manifests_from_dir(directory: str, collect_errors: bool = False) -> ManifestMap:
+    """manifest relpath -> {normalised key: ManifestEntry}.
+
+    Discovers manifests at ANY depth (monorepo recursion; see
+    discover_manifests_in_dir for exclusions). Loads ALL discovered
+    manifests (up to MAX_MANIFESTS_HARD, beyond which ManifestError);
+    the MAX_MANIFESTS audit cap is applied SYMMETRICALLY by
+    diff_manifests, never per-side here. In strict mode (default) a
+    present-but-unparseable manifest raises ManifestError (exit 2
+    naming the file); with collect_errors=True the failure is recorded
+    in `.errors` for diff_manifests to enforce (an error identical in
+    base and head is pre-existing and does not fail the run).
+    """
+    result = ManifestMap()
+    relpaths = discover_manifests_in_dir(directory)
+    result.total_found = len(relpaths)
+    result.truncated = len(relpaths) > MAX_MANIFESTS
+    if len(relpaths) > MAX_MANIFESTS_HARD:
+        raise ManifestError(
+            f"{len(relpaths)} manifests under {directory} exceeds the hard "
+            f"cap of {MAX_MANIFESTS_HARD}; refusing a partial audit")
+    for rel in relpaths:
+        fname = os.path.basename(rel)
+        path = os.path.join(directory, rel)
         try:
-            with open(path, "r", encoding="utf-8", errors="strict") as fh:
-                text = fh.read()
-        except (OSError, UnicodeDecodeError) as e:
-            raise ManifestError(f"cannot read manifest {path}: {e}") from e
-        result[fname] = _entries_from_text(fname, text, path)
+            try:
+                text = _read_manifest_file(path, directory)
+            except (OSError, UnicodeDecodeError) as e:
+                raise ManifestError(f"cannot read manifest {path}: {e}") from e
+            result[rel] = _entries_from_text(fname, text, path)
+        except ManifestError as e:
+            if not collect_errors:
+                raise
+            raw = ""
+            try:
+                with open(path, "rb") as fh:
+                    raw = fh.read(MAX_MANIFEST_BYTES + 1).decode("utf-8", "surrogateescape")
+            except OSError:
+                raw = ""
+            result.errors[rel] = (_content_hash(raw), str(e))
     return result
 
 
@@ -432,28 +544,93 @@ class AddedDep:
     manifest_path: str = ""   # full path (diff mode); defaults to manifest
 
 
-def diff_manifests(base: dict, head: dict) -> list[AddedDep]:
-    """Added = present in head, absent in base (any section — a dep moving
-    peerDependencies -> dependencies is NOT an addition). Version bumps
-    are NOT adds. Comparison keys are normalised (PyPI PEP 503, npm
-    lowercased)."""
-    added: list[AddedDep] = []
-    for fname in sorted(head):
+class AddedList(list):
+    """list[AddedDep] plus manifest-cap metadata for honest reporting."""
+    manifest_truncated = False
+    manifest_total = 0
+    manifest_audited = 0
+
+
+def _entries_signature(entries: dict) -> tuple:
+    return tuple(sorted((k, getattr(v, "spec", str(v)),
+                         getattr(v, "section", "")) for k, v in entries.items()))
+
+
+def diff_manifests(base: dict, head: dict) -> AddedList:
+    """Added = present in head, absent in base for the SAME manifest
+    relpath (any section — a dep moving peerDependencies -> dependencies
+    is NOT an addition). Version bumps are NOT adds. Manifests present
+    only in head contribute all their deps; only in base are ignored.
+    Comparison keys are normalised (PyPI PEP 503, npm lowercased).
+
+    v0.2 fix pass:
+    * The MAX_MANIFESTS cap is applied to the UNION of relpaths, the
+      same selected set on both sides — a manifest dropped by the cap
+      is dropped from base AND head, so truncation can never manufacture
+      an "added" dep (it is reported via AddedList.manifest_truncated).
+    * Rename pairing: a head-only manifest is paired with a base-only
+      manifest of the same filename when exactly one candidate exists,
+      or when a candidate's entries are identical — a pure move is not
+      a re-audit of every dep.
+    * Collected manifest errors (collect_errors mode): a head error
+      whose content differs from base's error at the same relpath
+      raises ManifestError; an identical error in both is pre-existing
+      and skipped.
+    """
+    head_errors = getattr(head, "errors", {}) or {}
+    base_errors = getattr(base, "errors", {}) or {}
+    for rel, (h, msg) in sorted(head_errors.items()):
+        if base_errors.get(rel, (None, ""))[0] != h:
+            raise ManifestError(msg)
+    union = sorted(set(base) | set(head))
+    truncated = len(union) > MAX_MANIFESTS
+    selected = set(union[:MAX_MANIFESTS]) if truncated else set(union)
+    # rename pairing among unselected-by-exact-path manifests
+    paired_base_for: dict[str, str] = {}
+    base_only = [k for k in selected if k not in head and k in base]
+    head_only = [k for k in selected if k not in base and k in head]
+    used_base: set[str] = set()
+    for hk in sorted(head_only):
+        cands = [bk for bk in base_only
+                 if bk not in used_base and os.path.basename(bk) == os.path.basename(hk)]
+        pick = None
+        identical = [bk for bk in cands
+                     if _entries_signature(base[bk]) == _entries_signature(head[hk])]
+        if len(identical) == 1:
+            pick = identical[0]
+        elif len(cands) == 1:
+            pick = cands[0]
+        if pick is not None:
+            paired_base_for[hk] = pick
+            used_base.add(pick)
+    added = AddedList()
+    added.manifest_truncated = truncated
+    added.manifest_total = len(union)
+    added.manifest_audited = len(selected)
+    for key_path in sorted(head):
+        if key_path not in selected:
+            continue
+        fname = os.path.basename(key_path)
+        if fname not in ECOSYSTEMS:
+            continue
         ecosystem = ECOSYSTEMS[fname]
-        base_keys = set(base.get(fname, {}).keys())
-        for key in sorted(head[fname], key=str.lower):
+        base_entries = base.get(key_path)
+        if base_entries is None and key_path in paired_base_for:
+            base_entries = base[paired_base_for[key_path]]
+        base_keys = set((base_entries or {}).keys())
+        for key in sorted(head[key_path], key=str.lower):
             if key not in base_keys:
-                e = head[fname][key]
+                e = head[key_path][key]
                 if isinstance(e, ManifestEntry):
                     added.append(AddedDep(name=e.name, ecosystem=ecosystem,
                                           manifest=fname, version_spec=e.spec,
                                           section_hint=e.section,
-                                          manifest_path=fname))
+                                          manifest_path=key_path))
                 else:  # plain {name: spec} dicts (back-compat)
                     added.append(AddedDep(name=str(key), ecosystem=ecosystem,
                                           manifest=fname, version_spec=str(e),
-                                          manifest_path=fname))
-    added.sort(key=lambda d: d.name.lower())
+                                          manifest_path=key_path))
+    added.sort(key=lambda d: (d.manifest_path, d.name.lower()))
     return added
 
 
@@ -675,22 +852,6 @@ def _git(args: list[str], cwd: str):
         raise ManifestError(f"git {' '.join(args)} failed to run: {e}") from e
 
 
-def _git_path_exists(ref: str, path: str, cwd: str) -> bool:
-    """True iff `path` exists at `ref`. Verifies the ref itself is readable
-    first; any other git failure raises ManifestError (exit 2)."""
-    r = _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd)
-    if r.returncode != 0:
-        raise ManifestError(
-            f"git ref '{ref}' is not readable in {cwd} "
-            f"({r.stderr.strip()[:200] or 'unknown git error'})")
-    r = _git(["ls-tree", ref, "--", path], cwd)
-    if r.returncode != 0:
-        raise ManifestError(
-            f"git ls-tree failed for {path} at {ref}: "
-            f"{r.stderr.strip()[:200]}")
-    return bool(r.stdout.strip())
-
-
 def _git_show(ref: str, path: str, cwd: str) -> str:
     r = _git(["show", f"{ref}:{path}"], cwd)
     if r.returncode != 0:
@@ -704,13 +865,67 @@ def _git_show(ref: str, path: str, cwd: str) -> str:
     return r.stdout
 
 
-def load_manifests_from_ref(ref: str, cwd: str) -> dict[str, dict[str, ManifestEntry]]:
-    result: dict[str, dict[str, ManifestEntry]] = {}
-    for fname in MANIFEST_NAMES:
-        if not _git_path_exists(ref, fname, cwd):
-            continue  # genuinely absent at this ref — not an error
-        text = _git_show(ref, fname, cwd)
-        result[fname] = _entries_from_text(fname, text, f"{ref}:{fname}")
+def _git_list_manifests(ref: str, cwd: str) -> tuple[list[str], list[str]]:
+    """(manifest relpaths, symlinked-manifest relpaths) at `ref`.
+
+    Uses `git ls-tree -r -z` (NUL-terminated, unquoted) so paths with
+    spaces, quotes, newlines or non-ASCII names are returned verbatim —
+    the default C-quoted form silently hid such manifests in early v0.2.
+    Symlinked manifests (mode 120000) are reported separately: their blob
+    is a target path, not manifest content, and is never parsed as one.
+    """
+    r = _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd)
+    if r.returncode != 0:
+        raise ManifestError(
+            f"git ref '{ref}' is not readable in {cwd} "
+            f"({r.stderr.strip()[:200] or 'unknown git error'})")
+    r = _git(["ls-tree", "-r", "-z", ref], cwd)
+    if r.returncode != 0:
+        raise ManifestError(
+            f"git ls-tree failed at {ref}: {r.stderr.strip()[:200]}")
+    paths: list[str] = []
+    links: list[str] = []
+    for entry in r.stdout.split("\0"):
+        if not entry or "\t" not in entry:
+            continue
+        meta, path = entry.split("\t", 1)
+        mode = meta.split(" ", 1)[0]
+        if os.path.basename(path) not in MANIFEST_NAMES or _rel_excluded(path):
+            continue
+        (links if mode == "120000" else paths).append(path)
+    return sorted(paths), sorted(links)
+
+
+def load_manifests_from_ref(ref: str, cwd: str,
+                            collect_errors: bool = False) -> ManifestMap:
+    """Manifests at ANY depth at `ref`, paired by relative path.
+
+    See _git_list_manifests for path handling. Symlinked manifests are
+    SKIPPED with a stderr note (never parsed, never an error). Loads all
+    discovered manifests up to MAX_MANIFESTS_HARD (beyond: ManifestError);
+    the MAX_MANIFESTS audit cap is applied symmetrically by
+    diff_manifests. collect_errors behaves as in load_manifests_from_dir.
+    """
+    relpaths, links = _git_list_manifests(ref, cwd)
+    for rel in links:
+        print(f"note: symlinked manifest {ref}:{rel} is skipped "
+              "(git mode does not follow manifest symlinks)", file=sys.stderr)
+    result = ManifestMap()
+    result.total_found = len(relpaths)
+    result.truncated = len(relpaths) > MAX_MANIFESTS
+    if len(relpaths) > MAX_MANIFESTS_HARD:
+        raise ManifestError(
+            f"{len(relpaths)} manifests at {ref} exceeds the hard cap of "
+            f"{MAX_MANIFESTS_HARD}; refusing a partial audit")
+    for rel in relpaths:
+        fname = os.path.basename(rel)
+        text = _git_show(ref, rel, cwd)
+        try:
+            result[rel] = _entries_from_text(fname, text, f"{ref}:{rel}")
+        except ManifestError as e:
+            if not collect_errors:
+                raise
+            result.errors[rel] = (_content_hash(text), str(e))
     return result
 
 
@@ -764,6 +979,10 @@ class FakeRegistry:
                     raise ValueError(
                         f"malformed registry fixture {path}: exists must be bool")
                 weekly = raw.get("weekly_downloads")
+                if weekly is not None and type(weekly) is int and weekly < 0:
+                    raise ValueError(
+                        f"malformed registry fixture {path}: "
+                        "weekly_downloads must not be negative")
                 if weekly is not None and type(weekly) is not int:
                     raise ValueError(
                         f"malformed registry fixture {path}: "
@@ -790,6 +1009,7 @@ class LiveRegistry:
 
     def __init__(self, timeout: float = 10.0):
         self.timeout = timeout
+        self._cache: dict[tuple[str, str], RegistryInfo] = {}
 
     def _get_json(self, url: str):
         req = urllib.request.Request(url, headers={"User-Agent": f"phantomdep/{VERSION}"})
@@ -800,6 +1020,18 @@ class LiveRegistry:
         return json.loads(body.decode("utf-8", "replace"))
 
     def lookup(self, ecosystem: str, name: str) -> RegistryInfo:
+        # One lookup per (ecosystem, normalised name) per run: the same
+        # dep added in N monorepo manifests must get ONE consistent
+        # answer (and one pair of HTTP calls), not N chances for a
+        # rate-limit failure to flip a verdict between manifests.
+        key = (ecosystem, _norm_key(ecosystem, name))
+        if key in self._cache:
+            return self._cache[key]
+        info = self._lookup_uncached(ecosystem, name)
+        self._cache[key] = info
+        return info
+
+    def _lookup_uncached(self, ecosystem: str, name: str) -> RegistryInfo:
         try:
             if ecosystem == "npm":
                 return self._npm(name)
@@ -827,7 +1059,8 @@ class LiveRegistry:
                 "https://api.npmjs.org/downloads/point/last-week/"
                 + urllib.parse.quote(name, safe="@"))
             # bool is not an int: require the exact type.
-            if isinstance(dl, dict) and type(dl.get("downloads")) is int:
+            if isinstance(dl, dict) and type(dl.get("downloads")) is int \
+                    and 0 <= dl["downloads"] <= 10**12:
                 downloads = dl["downloads"]
         except Exception:
             downloads = None
@@ -853,8 +1086,44 @@ class LiveRegistry:
                             times.append(t)
             if times:
                 created = min(times)
-        # PyPI JSON API has no download counts — honestly unknown.
-        return RegistryInfo(exists=True, created=created, weekly_downloads=None)
+        # PyPI JSON API has no download counts; in --live mode only, try
+        # pypistats. Any failure degrades to unknown, never a crash and
+        # never a fabricated number.
+        downloads = self._pypistats_weekly_downloads(name)
+        return RegistryInfo(exists=True, created=created,
+                            weekly_downloads=downloads)
+
+    def _pypistats_weekly_downloads(self, name: str) -> int | None:
+        """Weekly downloads from pypistats.org's documented public API:
+        GET https://pypistats.org/api/packages/<name>/recent ->
+        {"data": {"last_day": int, "last_week": int, "last_month": int},
+         "package": str, "type": "recent_downloads"}.
+        Name is PEP 503 normalised. Shape is validated defensively and
+        last_week must be exactly int (bool excluded)."""
+        try:
+            quoted = urllib.parse.quote(_norm_pypi(name), safe="-")
+            data = self._get_json(
+                f"https://pypistats.org/api/packages/{quoted}/recent")
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        # The payload must be ABOUT the requested package: a mismatched
+        # "package" (or a wrong "type", when present) is not evidence
+        # about this name and must never exonerate it.
+        pkg = data.get("package")
+        if not isinstance(pkg, str) or _norm_pypi(pkg) != _norm_pypi(name):
+            return None
+        ptype = data.get("type")
+        if ptype is not None and ptype != "recent_downloads":
+            return None
+        inner = data.get("data")
+        if not isinstance(inner, dict):
+            return None
+        value = inner.get("last_week")
+        if type(value) is not int or not (0 <= value <= 10**12):
+            return None  # bool, string, negative or absurd: not a count
+        return value
 
 
 # ------------------------------------------------------------ import usage ---
@@ -1150,13 +1419,20 @@ def _esc_pipe(s: str) -> str:
     return str(s).replace("|", "\\|")
 
 
-def render_text(results: list[DepResult]) -> str:
+def render_text(results: list[DepResult], notes: list[str] | None = None) -> str:
+    notes = notes or []
     if not results:
-        return "PhantomDep: no dependencies added. Nothing to audit.\n"
+        out = "PhantomDep: no dependencies added. Nothing to audit.\n"
+        return out + "".join(f"Note: {n}\n" for n in notes)
     skipped = [r for r in results if "SKIPPED-NONREGISTRY" in r.verdicts]
-    audited = [r for r in results if "SKIPPED-NONREGISTRY" not in r.verdicts]
+    not_audited = [r for r in results if "NOT-AUDITED" in r.verdicts]
+    audited = [r for r in results if "SKIPPED-NONREGISTRY" not in r.verdicts
+               and "NOT-AUDITED" not in r.verdicts]
     lines = [f"PhantomDep: {len(audited)} added dep(s) audited, "
-             f"{len(skipped)} non-registry dep(s) skipped."]
+             f"{len(skipped)} non-registry dep(s) skipped, "
+             f"{len(not_audited)} not audited (cap)."]
+    for n in notes:
+        lines.append(f"Note: {n}")
     for r in audited:
         lines.append(
             f"- {r.name} ({r.ecosystem}, {r.manifest_path or r.manifest}"
@@ -1181,31 +1457,45 @@ def render_text(results: list[DepResult]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_comment(results: list[DepResult]) -> str:
+def render_comment(results: list[DepResult], notes: list[str] | None = None) -> str:
+    notes = notes or []
     lines = [COMMENT_MARKER, "## 👻 PhantomDep PR Gate", ""]
     if not results:
         lines.append("No dependencies were added in this PR. Nothing to audit.")
+        for n in notes:
+            lines.append(f"\n⚠️ **Audit note:** {n}")
         return "\n".join(lines) + "\n"
     skipped = [r for r in results if "SKIPPED-NONREGISTRY" in r.verdicts]
     audited = [r for r in results if "SKIPPED-NONREGISTRY" not in r.verdicts]
     if audited:
-        lines += ["| Package | Ecosystem | Section | Verdict | Age | Weekly downloads | Imported? |",
-                  "|---|---|---|---|---|---|---|"]
+        lines += ["| Package | Ecosystem | Manifest | Section | Verdict | Age | Weekly downloads | Imported? |",
+                  "|---|---|---|---|---|---|---|---|"]
         for r in audited:
             lines.append(
-                f"| `{_esc_pipe(r.name)}` | {r.ecosystem} | {_esc_pipe(r.section or '—')} "
+                f"| `{_esc_pipe(r.name)}` | {r.ecosystem} | `{_esc_pipe(r.manifest_path or r.manifest)}` | {_esc_pipe(r.section or '—')} "
                 f"| {', '.join(r.verdicts)} "
                 + (f"(close to `{_esc_pipe(r.typo_match)}`)" if r.typo_match else "")
                 + f"| {_fmt(r.age_days, ' days')} | {_fmt(r.weekly_downloads)} "
                   f"| {_fmt(r.imported)} |")
     blocking = [r.name for r in results if r.blocking]
+    incomplete = any("NOT-AUDITED" in r.verdicts for r in results) or bool(notes)
     lines += [""]
     if blocking:
         lines.append(f"**Blocking:** {', '.join(blocking)} — NOT-FOUND or "
                      "blocking SUSPECT-TYPO. Do not merge until resolved.")
+        if incomplete:
+            lines.append("⚠️ **Audit incomplete** — some added deps were "
+                         "NOT-AUDITED (cap) or a note below applies; the "
+                         "blocking list above may not be complete.")
+    elif incomplete:
+        lines.append("⚠️ **Audit incomplete** — some added deps were "
+                     "NOT-AUDITED (cap) or a note below applies; 'no "
+                     "blocking findings' does NOT cover the unaudited rest.")
     else:
         lines.append("No blocking findings. Warnings above (NEWBORN / "
                      "LOW-DOWNLOADS / UNUSED / TYPO-LOOKALIKE) are advisory only.")
+    for n in notes:
+        lines.append(f"\n⚠️ **Audit note:** {n}")
     if skipped:
         lines += ["", "### Skipped — non-registry specs (not audited)", ""]
         for r in skipped:
@@ -1217,12 +1507,14 @@ def render_comment(results: list[DepResult]) -> str:
                  "checks are not unique to this tool (see pkgguard-cli / "
                  "Socket); its delta is diff-scoping + import-usage + this "
                  "one review comment. Download counts are \"unknown\" where "
-                 "the registry API does not provide them._")
+                 "no API provides them (PyPI counts in --live mode come "
+                 "from pypistats)._")
     return "\n".join(lines) + "\n"
 
 
-def results_to_json(results: list[DepResult]) -> str:
+def results_to_json(results: list[DepResult], notes: list[str] | None = None) -> str:
     return json.dumps({"tool": "phantomdep", "version": VERSION,
+                       "notes": notes or [],
                        "exit_code": exit_code_for(results),
                        "results": [asdict(r) | {"blocking": r.blocking}
                                    for r in results]},
@@ -1255,8 +1547,9 @@ def main(argv: list[str] | None = None) -> int:
             if not os.path.isdir(args.base_dir) or not os.path.isdir(args.head_dir):
                 print("error: --base-dir/--head-dir must be directories", file=sys.stderr)
                 return 2
-            added = diff_manifests(load_manifests_from_dir(args.base_dir),
-                                   load_manifests_from_dir(args.head_dir))
+            added = diff_manifests(
+                load_manifests_from_dir(args.base_dir, collect_errors=True),
+                load_manifests_from_dir(args.head_dir, collect_errors=True))
         elif args.diff_file:
             text = _read_capped(args.diff_file, MAX_DIFF_BYTES)
             if text is None:
@@ -1266,8 +1559,9 @@ def main(argv: list[str] | None = None) -> int:
             added = parse_diff_file(text)
             head_dir = head_dir or (args.repo if os.path.isdir(args.repo) else None)
         elif args.base and args.head:
-            added = diff_manifests(load_manifests_from_ref(args.base, args.repo),
-                                   load_manifests_from_ref(args.head, args.repo))
+            added = diff_manifests(
+                load_manifests_from_ref(args.base, args.repo, collect_errors=True),
+                load_manifests_from_ref(args.head, args.repo, collect_errors=True))
             head_dir = head_dir or args.repo
         else:
             ap.print_usage(sys.stderr)
@@ -1289,11 +1583,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         registry = _UnknownRegistry()
 
+    notes: list[str] = []
+    if getattr(added, "manifest_truncated", False):
+        notes.append(
+            f"manifest cap: {added.manifest_total} manifests found, only "
+            f"the first {added.manifest_audited} (sorted by path, same set "
+            "on both sides) were audited; the rest were NOT audited.")
     results = audit(added, registry, head_dir)
+    if any("NOT-AUDITED" in r.verdicts for r in results):
+        notes.append(
+            f"dep cap: more than {MAX_AUDITED_DEPS} added deps; the rest "
+            "are marked NOT-AUDITED and were not checked.")
     if args.comment_out:
         with open(args.comment_out, "w", encoding="utf-8") as fh:
-            fh.write(render_comment(results))
-    sys.stdout.write(results_to_json(results) if args.json else render_text(results))
+            fh.write(render_comment(results, notes=notes))
+    sys.stdout.write(results_to_json(results, notes=notes) if args.json
+                     else render_text(results, notes=notes))
     return exit_code_for(results)
 
 
