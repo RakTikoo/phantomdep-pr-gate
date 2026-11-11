@@ -1,0 +1,69 @@
+name: "PhantomDep PR Gate"
+description: "Audit only the dependencies a PR adds: existence, age, downloads, typo-distance, and import usage. Posts one PR comment."
+author: "PhantomDep"
+branding:
+  icon: "eye"
+  color: "purple"
+inputs:
+  live:
+    description: "Use live npm/PyPI registry lookups"
+    required: false
+    default: "true"
+runs:
+  using: "composite"
+  steps:
+    - name: Run PhantomDep
+      shell: bash
+      env:
+        PHANTOMDEP_LIVE: ${{ inputs.live }}
+      run: |
+        ARGS="--base ${{ github.event.pull_request.base.sha }} --head ${{ github.event.pull_request.head.sha }} --repo . --comment-out phantomdep-comment.md"
+        if [ "$PHANTOMDEP_LIVE" = "true" ]; then ARGS="$ARGS --live"; fi
+        # Any non-zero exit (1 = blocking finding, 2 = tool error) is
+        # captured, not fatal yet: the comment is still posted, and the
+        # Enforce step fails afterwards so the check is red either way.
+        set +e
+        python3 "${{ github.action_path }}/phantomdep.py" $ARGS
+        echo "PHANTOMDEP_EXIT=$?" >> "$GITHUB_ENV"
+        set -e
+    - name: Post or update the PhantomDep comment
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- phantomdep-pr-gate -->';
+          let body;
+          if (fs.existsSync('phantomdep-comment.md')) {
+            body = fs.readFileSync('phantomdep-comment.md', 'utf8');
+          } else {
+            // The audit step failed before writing a comment (tool error):
+            // still leave exactly one marker comment explaining that.
+            body = marker + '\n## 👻 PhantomDep PR Gate\n\n'
+              + 'PhantomDep itself errored before it could audit this PR '
+              + '(see the workflow log). This is a tool error, not a '
+              + 'finding about your dependencies.\n';
+          }
+          const comments = await github.paginate(
+            github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100 });
+          const existing = comments.find(c => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, body });
+          }
+    - name: Enforce gate
+      if: always()
+      shell: bash
+      run: |
+        if [ "$PHANTOMDEP_EXIT" != "0" ]; then
+          echo "PhantomDep failed with exit code $PHANTOMDEP_EXIT (1 = blocking finding: NOT-FOUND or SUSPECT-TYPO; anything else = tool error)."
+          exit 1
+        fi
+        echo "PhantomDep: no blocking findings."
