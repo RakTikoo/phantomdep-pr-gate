@@ -1,0 +1,9 @@
+{"info": {"name": "requests", "version": "2.32.3", "summary": "Python HTTP for Humans."},
+ "releases": {
+   "0.2.0": [{"filename": "requests-0.2.0.tar.gz", "yanked": true,
+              "upload_time": "2010-01-01T00:00:00", "upload_time_iso_8601": "2010-01-01T00:00:00.000000Z"}],
+   "1.0.0": [{"filename": "requests-1.0.0.tar.gz", "yanked": false,
+              "upload_time": "2011-02-13T00:00:00"}],
+   "2.32.3": [{"filename": "requests-2.32.3.tar.gz", "yanked": false,
+               "upload_time": "2024-05-29T00:00:00", "upload_time_iso_8601": "2024-05-29T00:00:00.000000Z"}]},
+ "urls": []}
