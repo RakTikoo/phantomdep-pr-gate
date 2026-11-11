@@ -1,0 +1,7 @@
+[project]
+name="x"
+version="0.1.0"
+dependencies=["flask>=3","scikit-learn>=1.5"]
+
+[project.optional-dependencies]
+web=["requests>=2.31"]
