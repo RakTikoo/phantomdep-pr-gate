@@ -1,0 +1,7 @@
+{
+  "ecosystem": "npm",
+  "name": "@nestjs/core",
+  "exists": true,
+  "created": "2017-08-06T00:00:00.000Z",
+  "weekly_downloads": 3000000
+}
