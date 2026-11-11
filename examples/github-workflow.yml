@@ -16,6 +16,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: ./   # in a real repo: uses: <owner>/phantomdep-pr-gate@v0
+      - uses: ./   # in a real repo: uses: RakTikoo/phantomdep-pr-gate@v0.1
         with:
           live: "true"

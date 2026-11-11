@@ -1,0 +1,29 @@
+# Dogfood consumer workflow (example / local simulation companion).
+# A real consumer pins a tagged release, e.g.:
+#   uses: RakTikoo/phantomdep-pr-gate@v0.1
+# PhantomDep has NOT yet run as an Action in another repo on GitHub;
+# the dogfood fixtures under fixtures/dogfood-* are a local simulation
+# using FakeRegistry, verified by run_tests.py.
+name: PhantomDep PR Gate (dogfood)
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - "**/package.json"
+      - "requirements.txt"
+      - "**/requirements.txt"
+      - "pyproject.toml"
+      - "**/pyproject.toml"
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  phantomdep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: RakTikoo/phantomdep-pr-gate@v0.1
+        with:
+          live: "true"
