@@ -1,0 +1,6 @@
+{
+  "name": "x",
+  "dependencies": {
+    "@babel/core": "^7.24.0"
+  }
+}
