@@ -129,6 +129,13 @@ PYPI_ALIASES = {
     "djangorestframework": ["rest_framework"],
     "gitpython": ["git"],
     "pyserial": ["serial"],
+    # Distribution names differ from their documented Python imports.
+    "google-auth": ["google.auth"],
+    "grpcio": ["grpc"],
+    "pydantic-settings": ["pydantic_settings"],
+    "python-dotenv": ["dotenv"],
+    "python-multipart": ["multipart"],
+    "scikit-image": ["skimage"],
 }
 NPM_ALIASES: dict[str, list[str]] = {}  # npm import name == package name
 

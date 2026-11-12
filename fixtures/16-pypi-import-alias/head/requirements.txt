@@ -1,0 +1,6 @@
+google-auth>=2
+grpcio>=1
+pydantic-settings>=2
+python-dotenv>=1
+python-multipart>=0.0.9
+scikit-image>=0.24

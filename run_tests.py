@@ -118,6 +118,18 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(results[0].verdicts, ["OK"])
         self.assertEqual(pd.exit_code_for(results), 0)
 
+    def test_16_pypi_import_aliases(self):
+        added, results = run_pair("16-pypi-import-alias")
+        self.assertEqual({a.name for a in added}, {
+            "google-auth", "grpcio", "pydantic-settings",
+            "python-dotenv", "python-multipart", "scikit-image",
+        })
+        self.assertEqual(len(results), 6)
+        for result in results:
+            self.assertTrue(result.imported, result.name)
+            self.assertEqual(result.verdicts, ["OK"], result.name)
+            self.assertEqual(pd.exit_code_for([result]), 0, result.name)
+
     def test_11_newborn_npm_low_downloads(self):
         added, results = run_pair("11-newborn-npm")
         self.assertIn("NEWBORN", results[0].verdicts)
