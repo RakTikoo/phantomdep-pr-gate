@@ -24,7 +24,8 @@ For each added dependency in `package.json`, `requirements.txt`, or
   compared with scoped names (`@babel/core` does not make `core` popular)
 - **Actually imported?** — greps the head tree for `import` / `require` /
   `from … import` of the package (with a small alias map, e.g.
-  `scikit-learn` → `sklearn`; an unknown alias for a hyphenated PyPI name
+  `scikit-learn` → `sklearn`, `PyMuPDF` → `fitz`,
+  `discord.py` → `discord`, and `PyGithub` → `github`; an unknown alias for a hyphenated PyPI name
   is reported as `imported=unknown`, never as a false `UNUSED`)
 
 Output is one markdown PR comment (`--comment-out`), plus text or `--json`.

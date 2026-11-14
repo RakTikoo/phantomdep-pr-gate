@@ -130,6 +130,20 @@ class CorpusTests(unittest.TestCase):
             self.assertEqual(result.verdicts, ["OK"], result.name)
             self.assertEqual(pd.exit_code_for([result]), 0, result.name)
 
+    def test_remaining_pypi_import_aliases(self):
+        cases = [("18-pymupdf-alias", "PyMuPDF"),
+                 ("19-discord-py-alias", "discord.py"),
+                 ("20-pygithub-alias", "PyGithub")]
+        for pair, name in cases:
+            with self.subTest(package=name):
+                added, results = run_pair(pair)
+                self.assertEqual([a.name for a in added], [name])
+                self.assertEqual(len(results), 1)
+                self.assertIs(results[0].imported, True)
+                self.assertEqual(results[0].verdicts, ["OK"])
+                self.assertIsNone(results[0].weekly_downloads)
+                self.assertEqual(pd.exit_code_for(results), 0)
+
     def test_11_newborn_npm_low_downloads(self):
         added, results = run_pair("11-newborn-npm")
         self.assertIn("NEWBORN", results[0].verdicts)
@@ -656,6 +670,13 @@ class ImportV2Tests(unittest.TestCase):
                  ("opencv-python", "import cv2\n")]
         for name, src in cases:
             self.assertTrue(self._check(name, "pypi", {"a.py": src}), name)
+
+    def test_aliases_do_not_match_longer_module_names(self):
+        for name, source in [("PyMuPDF", "import fitz_helpers\n"),
+                             ("discord.py", "import discord_tools\n"),
+                             ("PyGithub", "import githubish\n")]:
+            with self.subTest(package=name):
+                self.assertIs(self._check(name, "pypi", {"main.py": source}), False)
 
     def test_symlink_escape_not_followed(self):
         import tempfile

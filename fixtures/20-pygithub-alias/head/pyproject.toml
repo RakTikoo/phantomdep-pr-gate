@@ -1,0 +1,4 @@
+[project]
+name = "alias-fixture"
+version = "0.1.0"
+dependencies = ["PyGithub"]

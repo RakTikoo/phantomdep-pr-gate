@@ -4,6 +4,12 @@ All notable changes to PhantomDep PR Gate, newest first. Versions are
 the GitHub tags/releases on this repo; consumers pin a version with
 `uses: RakTikoo/phantomdep-pr-gate@v0.2` (or `@v0.1`).
 
+## Unreleased
+
+- Recognize `PyMuPDF` / `fitz`, `discord.py` / `discord`, and
+  `PyGithub` / `github` as known PyPI import aliases. Their real imports
+  no longer receive `UNUSED` warnings; gate exit codes are unchanged.
+
 ## v0.2 — 2026-11-10
 
 - **Monorepo recursion:** manifests (`package.json`,
