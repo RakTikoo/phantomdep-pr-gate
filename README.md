@@ -2,6 +2,8 @@
 
 **One job: audit only the dependencies a pull request *adds*.**
 
+![PhantomDep PR Gate terminal demo](phantomdep-pr-gate.gif)
+
 For each added dependency in `package.json`, `requirements.txt`, or
 `pyproject.toml`, PhantomDep checks:
 
