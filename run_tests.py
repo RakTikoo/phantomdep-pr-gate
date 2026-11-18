@@ -169,6 +169,24 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(added, [])
         self.assertEqual(results, [])
 
+    def test_23_declared_typing_import_counts_as_used(self):
+        added, results = run_pair("23-type-checking-declared")
+        self.assertEqual([a.name for a in added], ["requests"])
+        self.assertIs(results[0].imported, True)
+        self.assertEqual(results[0].verdicts, ["OK"])
+        self.assertEqual(pd.exit_code_for(results), 0)
+
+    def test_24_undeclared_typing_import_is_outside_manifest_delta(self):
+        pair = "24-type-checking-undeclared"
+        head = os.path.join(FIX, pair, "head")
+        undeclared = pd.AddedDep("requests", "pypi", "requirements.txt")
+        self.assertIs(pd.check_imported(undeclared, head), True)
+        added, results = run_pair(pair)
+        self.assertEqual([a.name for a in added], ["flask"])
+        self.assertEqual([r.name for r in results], ["flask"])
+        self.assertEqual(results[0].verdicts, ["OK"])
+        self.assertEqual(pd.exit_code_for(results), 0)
+
 
 class UnitTests(unittest.TestCase):
     def test_levenshtein(self):
