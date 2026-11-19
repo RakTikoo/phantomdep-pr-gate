@@ -90,6 +90,12 @@ pipx install git+https://github.com/RakTikoo/phantomdep-pr-gate
 phantomdep --base origin/main --head HEAD --live
 ```
 
+With uv:
+
+```bash
+uv tool install git+https://github.com/RakTikoo/phantomdep-pr-gate
+```
+
 Not on PyPI — the git URL is the package source. Stdlib only, so
 nothing else gets installed with it.
 
