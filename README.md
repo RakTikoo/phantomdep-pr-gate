@@ -1,8 +1,12 @@
-# PhantomDep PR Gate 👻
+# PhantomDep PR Gate 👻 — audit the dependencies a pull request adds
 
 [![Tests](https://github.com/RakTikoo/phantomdep-pr-gate/actions/workflows/tests.yml/badge.svg)](https://github.com/RakTikoo/phantomdep-pr-gate/actions/workflows/tests.yml)
 
 **One job: audit only the dependencies a pull request *adds*.**
+
+**Install in one step:** `pip install git+https://github.com/RakTikoo/phantomdep-pr-gate`,
+then run `phantomdep --base origin/main --head HEAD --live`. Full
+options are under [Install](#install).
 
 **First contribution?** Start with a [good first issue](https://github.com/RakTikoo/phantomdep-pr-gate/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 

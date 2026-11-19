@@ -1,6 +1,6 @@
 ---
 name: phantomdep-pr-gate
-description: Audit only the dependencies a pull request adds — typosquats and lookalike package names, packages that do not exist on npm or PyPI, newborn or barely-downloaded packages, and dependencies added but never imported. Use when asked to check, review or gate a PR's new dependencies in package.json, requirements.txt, pyproject.toml or package-lock.json, when reviewing dependency changes before merging, or when a PR adds a suspicious-looking package name.
+description: Audit only the dependencies a pull request adds — typosquats and lookalike package names, packages that do not exist on npm or PyPI, newborn or barely-downloaded packages, and dependencies added but never imported. Use when asked to check, review or gate a PR's new dependencies in package.json, requirements.txt, pyproject.toml or package-lock.json, when reviewing dependency changes before merging, or when a PR adds a suspicious-looking package name. Not for auditing dependencies a project already has (only added ones are checked), for scanning AI-agent skills (use skillscan), or for checking workflow run: commands (use ci-command-truth).
 license: MIT
 compatibility: Requires Python 3.11+ and pip. Installing needs network access to GitHub. Auditing is offline by default; live registry lookups happen only with --live.
 ---
