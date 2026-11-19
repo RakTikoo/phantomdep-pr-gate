@@ -246,6 +246,15 @@ repos:
 If your default branch is not `main`, override it via the hook's
 `args` (later flags win): `args: [--base, origin/develop]`.
 
+## Use with an AI agent
+
+This repo ships a [SKILL.md](SKILL.md) written to the Agent Skills open
+standard. If your coding agent supports skills, point it at this repo
+and it can install PhantomDep, audit the dependencies a pull request
+adds, and read the verdicts for you. The skill works as promised when
+the repo is cloned under its real name (`phantomdep-pr-gate`) — the
+standard ties the skill's name to its folder.
+
 ## Safety
 
 - **Static only.** Scanned-repo code is never executed; no package named
