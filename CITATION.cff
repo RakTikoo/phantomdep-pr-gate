@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - name: RakTikoo
+title: "phantomdep-pr-gate: audit the dependencies a pull request adds"
+version: 0.3.0
+date-released: 2026-11-14
+license: MIT
+url: "https://github.com/RakTikoo/phantomdep-pr-gate"
+repository-code: "https://github.com/RakTikoo/phantomdep-pr-gate"
+abstract: >-
+  Audits only the dependencies a pull request adds: whether each new package
+  exists on npm or PyPI at all (the slopsquatting signal), its age, and its
+  weekly downloads. Verdicts follow an exact, documented exit policy.
+keywords:
+  - dependencies
+  - pull request
+  - supply chain
+  - slopsquatting
+  - audit

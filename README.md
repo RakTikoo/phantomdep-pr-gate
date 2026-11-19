@@ -1,5 +1,7 @@
 # PhantomDep PR Gate 👻 — audit the dependencies a pull request adds
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/RakTikoo/phantomdep-pr-gate)
+
 [![Tests](https://github.com/RakTikoo/phantomdep-pr-gate/actions/workflows/tests.yml/badge.svg)](https://github.com/RakTikoo/phantomdep-pr-gate/actions/workflows/tests.yml)
 
 **One job: audit only the dependencies a pull request *adds*.**
@@ -108,6 +110,8 @@ python3 phantomdep.py --base origin/main --head HEAD --live
 ```
 
 There is also a [pre-commit](#pre-commit-hook) hook.
+
+**For agent users:** this repository ships a `SKILL.md` for AI agents. Install it with `npx skills add RakTikoo/phantomdep-pr-gate`.
 
 ## Quick start (offline-testable mode first)
 
