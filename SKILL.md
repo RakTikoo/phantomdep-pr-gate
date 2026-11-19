@@ -18,11 +18,32 @@ it. Nothing from the PR is installed or executed.
 
 ## Install
 
+The `phantomdep` command (standard library only), via pip, pipx or uv:
+
 ```bash
 pip install git+https://github.com/RakTikoo/phantomdep-pr-gate
+# or, isolated:
+pipx install git+https://github.com/RakTikoo/phantomdep-pr-gate
+# or with uv:
+uv tool install git+https://github.com/RakTikoo/phantomdep-pr-gate
 ```
 
-This provides the `phantomdep` command (standard library only).
+Not on PyPI — the git URL is the package source. Or use it with no
+install at all as a GitHub Action:
+
+```yaml
+uses: RakTikoo/phantomdep-pr-gate@v0.3.0
+```
+
+Or clone the repo and run the single file directly:
+
+```bash
+git clone https://github.com/RakTikoo/phantomdep-pr-gate
+cd phantomdep-pr-gate
+python3 phantomdep.py --base origin/main --head HEAD --live
+```
+
+There is also a pre-commit hook (see the README).
 
 ## Run
 
