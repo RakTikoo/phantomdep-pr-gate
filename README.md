@@ -79,7 +79,7 @@ Three ways in — pick one:
 [GitHub Action](#github-action) below:
 
 ```yaml
-uses: RakTikoo/phantomdep-pr-gate@v0.3.0
+uses: RakTikoo/phantomdep-pr-gate@v0.3.1
 ```
 
 **pip / pipx — the `phantomdep` command:**
@@ -226,9 +226,9 @@ downloads still blocks, exactly as before.
 ## GitHub Action
 
 Consumers pin a tagged release. Tags `v0.1` (at commit `eceb988`)
-and `v0.2` (at commit `97009c0`) both exist — `v0.3.0` is the current
+and `v0.2` (at commit `97009c0`) both exist — `v0.3.1` is the current
 release; see `RELEASE_NOTES.md` for the completed release record:
-`uses: RakTikoo/phantomdep-pr-gate@v0.3.0`.
+`uses: RakTikoo/phantomdep-pr-gate@v0.3.1`.
 
 See `action.yml` and `examples/github-workflow.yml`: on `pull_request`,
 the action runs PhantomDep with `--base`/`--head` SHAs in `--live` mode
@@ -250,9 +250,8 @@ the pushed range:
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/RakTikoo/phantomdep-pr-gate
-    rev: v0.3.0  # the hook definition ships on main with the packaging
-                 # update and in the first tagged release after v0.3.0;
-                 # until then, pin the main-branch commit SHA
+    rev: v0.3.1  # the hook definition ships on main with the packaging
+                 # update and in this tagged release
     hooks:
       - id: phantomdep
 ```

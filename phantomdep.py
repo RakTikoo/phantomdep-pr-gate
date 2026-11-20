@@ -46,7 +46,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     tomllib = None
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 MAX_MANIFEST_BYTES = 2_000_000
 MAX_DIFF_BYTES = 5_000_000
 MAX_REGISTRY_BYTES = 2_000_000

@@ -3,8 +3,8 @@ message: "If you use this software, please cite it as below."
 authors:
   - name: RakTikoo
 title: "phantomdep-pr-gate: audit the dependencies a pull request adds"
-version: 0.3.0
-date-released: 2026-11-14
+version: 0.3.1
+date-released: 2026-11-20
 license: MIT
 url: "https://github.com/RakTikoo/phantomdep-pr-gate"
 repository-code: "https://github.com/RakTikoo/phantomdep-pr-gate"

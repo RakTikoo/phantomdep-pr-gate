@@ -2,9 +2,9 @@
 
 All notable changes to PhantomDep PR Gate, newest first. Versions are
 the GitHub tags/releases on this repo; consumers pin a version with
-`uses: RakTikoo/phantomdep-pr-gate@v0.3.0`.
+`uses: RakTikoo/phantomdep-pr-gate@v0.3.1`.
 
-## Unreleased
+## v0.3.1 — 2026-11-20
 
 - **Packaging:** `pyproject.toml` added — `pip install
   git+https://github.com/RakTikoo/phantomdep-pr-gate` (or `pipx
@@ -18,6 +18,12 @@ the GitHub tags/releases on this repo; consumers pin a version with
   hook that runs at the pre-push stage, auditing `origin/main` → `HEAD`
   in `--live` mode when manifest files are in the pushed range.
   Packaging, hooks and docs only — the detection code is unchanged.
+- **Docs:** README test count corrected (120 → 122, as measured by
+  `run_tests.py`); README gains the DeepWiki badge and the
+  `npx skills add` agent-install line; `CITATION.cff` /
+  `codemeta.json` citation metadata added. This release exists so
+  the release tag contains the packaging and docs above — the
+  v0.3.0 tag predates them.
 
 ## v0.3.0 — 2026-11-14
 

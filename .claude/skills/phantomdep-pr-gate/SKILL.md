@@ -32,7 +32,7 @@ Not on PyPI — the git URL is the package source. Or use it with no
 install at all as a GitHub Action:
 
 ```yaml
-uses: RakTikoo/phantomdep-pr-gate@v0.3.0
+uses: RakTikoo/phantomdep-pr-gate@v0.3.1
 ```
 
 Or clone the repo and run the single file directly:
