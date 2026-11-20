@@ -282,7 +282,7 @@ standard ties the skill's name to its folder.
 ## Tests
 
 ```bash
-python3 run_tests.py   # 120 tests, zero deps, zero network (FakeRegistry;
+python3 run_tests.py   # 122 tests, zero deps, zero network (FakeRegistry;
                        # LiveRegistry + pypistats parsing is tested with
                        # mocked urlopen against captured-shape payloads)
 ```
