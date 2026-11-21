@@ -46,6 +46,12 @@ the GitHub tags/releases on this repo; consumers pin a version with
   cycles, lockfile direct adds, a lockfile typosquat block, and
   transitive-only churn; tests 109 → 120.
 
+## Unreleased
+
+- Recognize `PyMuPDF` / `fitz`, `discord.py` / `discord`, and
+  `PyGithub` / `github` as known PyPI import aliases. Their real imports
+  no longer receive `UNUSED` warnings; gate exit codes are unchanged.
+
 ## v0.2 — 2026-11-10
 
 - **Monorepo recursion:** manifests (`package.json`,

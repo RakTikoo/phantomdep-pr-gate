@@ -137,6 +137,9 @@ PYPI_ALIASES = {
     "python-dotenv": ["dotenv"],
     "python-multipart": ["multipart"],
     "scikit-image": ["skimage"],
+    "pymupdf": ["fitz"],
+    "discord-py": ["discord"],
+    "pygithub": ["github"],
 }
 NPM_ALIASES: dict[str, list[str]] = {}  # npm import name == package name
 
